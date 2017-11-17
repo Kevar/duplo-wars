@@ -7,7 +7,26 @@ public class Brick : MonoBehaviour
 {
     public List<Vector3> TopAnchors = new List<Vector3>();
     public List<Vector3> BottomAnchors = new List<Vector3>();
-    
+
+    public Dictionary<Brick, Vector3> ConnectedBrickMap = new Dictionary<Brick, Vector3>();
+
+    public void ApplyConnexionConstraints()
+    {
+        PropagatePositionChange(transform.position, new List<Brick>());
+    }
+
+    protected void PropagatePositionChange(Vector3 newPosition, List<Brick> brickAlreadyMoved)
+    {
+        if (brickAlreadyMoved.Contains(this))
+            return;
+
+        transform.position = newPosition;
+        brickAlreadyMoved.Add(this);
+
+        foreach (KeyValuePair<Brick, Vector3> connexion in ConnectedBrickMap)
+            connexion.Key.PropagatePositionChange(transform.position + connexion.Value, brickAlreadyMoved);
+    }
+
     //protected Collider my_Collider;
 
     //protected Camera my_Camera;
@@ -45,6 +64,10 @@ public class Brick : MonoBehaviour
         Gizmos.color = Color.blue;
         foreach (Vector3 bottom in BottomAnchors)
             Gizmos.DrawCube(transform.TransformPoint(bottom), Vector3.one * 0.1f);
+
+        Gizmos.color = Color.yellow;
+        foreach (Brick cb in ConnectedBrickMap.Keys)
+            Gizmos.DrawLine(transform.position, cb.transform.position);
     }
 
     //private void OnMouseDown()

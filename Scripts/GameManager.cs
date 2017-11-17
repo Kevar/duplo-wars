@@ -4,6 +4,21 @@ using UnityEngine;
 
 public class GameManager : MonoBehaviour
 {
+    protected class MagnetData
+    {
+        public Brick Target;
+
+        public Vector3 TargetAnchor;
+        public Vector3 SelfAnchor;
+
+        public MagnetData(Brick target, Vector3 targetAnchor, Vector3 selfAnchor)
+        {
+            Target = target;
+            TargetAnchor = targetAnchor;
+            SelfAnchor = selfAnchor;
+        }
+    }
+
     protected List<Brick> my_BrickList = null;
     protected Brick my_SelectedBrick = null;
 
@@ -15,6 +30,7 @@ public class GameManager : MonoBehaviour
     protected bool my_MovingBrick = false;
     protected Plane my_BrickMovePlane = new Plane();
     protected Vector3 my_BrickDeltaPosition = Vector3.zero;
+    protected Brick my_ConnectedBrickCandidate = null;
 
     private void Awake()
     {
@@ -26,7 +42,7 @@ public class GameManager : MonoBehaviour
         if (Input.GetMouseButtonDown(0))
             ManageMouseDown();
         if (Input.GetMouseButtonUp(0))
-            ManageMouseUp();
+            ManageMouseUp();       
     }
 
     private void FixedUpdate()
@@ -68,7 +84,10 @@ public class GameManager : MonoBehaviour
     {
         if(my_MouseDown)
         {
-            if(my_MovingBrick)
+            if(Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift))
+                DisconnectSelectedBrick();
+
+            if (my_MovingBrick)
             {
                 Ray r = my_Camera.ScreenPointToRay(Input.mousePosition);
                 float distance;
@@ -80,13 +99,13 @@ public class GameManager : MonoBehaviour
                 if (Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl))
                 {
                     //On récupère les paires d'ancre top/bottom qui sont visuellement (par rapport à la caméra) assez proches
-                    List<KeyValuePair<Vector3, Vector3>> anchorPairsInThreshold = new List<KeyValuePair<Vector3, Vector3>>();
+                    List<MagnetData> anchorPairsInThreshold = new List<MagnetData>();
 
                     float threshold = 20;
                     
                     foreach(Brick target in my_BrickList)
                     {
-                        if(target != my_SelectedBrick)
+                        if(target != my_SelectedBrick && !my_SelectedBrick.ConnectedBrickMap.ContainsKey(target))
                         {
                             //On teste les ancres supérieures de la brique sélectionnée avec les ancres inférieures de la brique cible
                             foreach(Vector3 topAnchor in my_SelectedBrick.TopAnchors)
@@ -105,7 +124,7 @@ public class GameManager : MonoBehaviour
                                     bottomScreenPosition.z = 0.0f;
 
                                     if((topScreenPosition - bottomScreenPosition).magnitude < threshold)
-                                        anchorPairsInThreshold.Add(new KeyValuePair<Vector3, Vector3>(worldTopAnchor, worldBottomAnchor));
+                                        anchorPairsInThreshold.Add(new MagnetData(target, worldBottomAnchor, worldTopAnchor));
                                 }
                             }
 
@@ -126,7 +145,7 @@ public class GameManager : MonoBehaviour
                                     topScreenPosition.z = 0.0f;
 
                                     if ((bottomScreenPosition - topScreenPosition).magnitude < threshold)
-                                        anchorPairsInThreshold.Add(new KeyValuePair<Vector3, Vector3>(worldBottomAnchor, worldTopAnchor));
+                                        anchorPairsInThreshold.Add(new MagnetData(target, worldTopAnchor, worldBottomAnchor));
                                 }
                             }
                         }
@@ -138,13 +157,14 @@ public class GameManager : MonoBehaviour
                         //Valeurs par défaut qui donne un résultat "neutre" si aucune paire n'est trouvée
                         Vector3 selectedBestAnchor = my_SelectedBrick.transform.position;
                         Vector3 targetBestAnchor = my_SelectedBrick.transform.position;
+                        Brick targetBestBrick = null;
 
                         float bestScreenDistance = float.MaxValue;
 
-                        foreach(KeyValuePair<Vector3, Vector3> anchorPair in anchorPairsInThreshold)
+                        foreach(MagnetData anchorPair in anchorPairsInThreshold)
                         {
-                            float screenDistance1 = my_Camera.WorldToScreenPoint(anchorPair.Key).z;
-                            float screenDistance2 = my_Camera.WorldToScreenPoint(anchorPair.Value).z;
+                            float screenDistance1 = my_Camera.WorldToScreenPoint(anchorPair.SelfAnchor).z;
+                            float screenDistance2 = my_Camera.WorldToScreenPoint(anchorPair.TargetAnchor).z;
 
                             float screenDistance = Mathf.Min(screenDistance1, screenDistance2);
 
@@ -152,16 +172,32 @@ public class GameManager : MonoBehaviour
                             {
                                 bestScreenDistance = screenDistance;
 
-                                selectedBestAnchor = anchorPair.Key;    //Par construction de la liste de paires, la première valeur correspond à l'ancre de la brique sélectionnée
-                                targetBestAnchor = anchorPair.Value;
+                                selectedBestAnchor = anchorPair.SelfAnchor;
+                                targetBestAnchor = anchorPair.TargetAnchor;
+                                targetBestBrick = anchorPair.Target;
                             }
                         }
 
                         //On déplace la brique sélectionnée pour correspondre à l'ancrage : ça revient à faire correspondre son ancre avec celle de l'ancre cible
                         Vector3 selectedBrickGlobalDeltaWithSelfAnchor = selectedBestAnchor - my_SelectedBrick.transform.position;
                         my_SelectedBrick.transform.position = targetBestAnchor - selectedBrickGlobalDeltaWithSelfAnchor;
+
+                        my_ConnectedBrickCandidate = targetBestBrick;
+                    }
+                    else
+                    {
+                        //Il n'y a pas de brique à potentiellement connecter
+                        my_ConnectedBrickCandidate = null;
                     }
                 }
+                else
+                {
+                    //On "lâche" le magnétisme, on ne considère donc plus qu'il y a connexion avec une autre brique
+                    my_ConnectedBrickCandidate = null;
+                }
+
+                //On gère le mécanisme de connexion
+                my_SelectedBrick.ApplyConnexionConstraints();
             }
 
             my_MousePreviousPosition = Input.mousePosition;
@@ -172,6 +208,27 @@ public class GameManager : MonoBehaviour
     {
         my_MouseDown = false;
         my_MovingBrick = false;
+
+        if (my_ConnectedBrickCandidate != null)
+        {
+            my_SelectedBrick.ConnectedBrickMap.Add(my_ConnectedBrickCandidate, my_ConnectedBrickCandidate.transform.position - my_SelectedBrick.transform.position);
+            my_ConnectedBrickCandidate.ConnectedBrickMap.Add(my_SelectedBrick, my_SelectedBrick.transform.position - my_ConnectedBrickCandidate.transform.position);
+
+            my_ConnectedBrickCandidate = null;
+        }
+
+    }
+
+    private void DisconnectSelectedBrick()
+    {
+        if (my_SelectedBrick != null)
+        {
+            foreach (Brick cb in new List<Brick>(my_SelectedBrick.ConnectedBrickMap.Keys))
+            {
+                my_SelectedBrick.ConnectedBrickMap.Remove(cb);
+                cb.ConnectedBrickMap.Remove(my_SelectedBrick);
+            }
+        }
     }
 
     private void SelectBrick(Brick b)
